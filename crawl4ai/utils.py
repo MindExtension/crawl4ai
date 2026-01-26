@@ -2299,7 +2299,8 @@ def normalize_url(
     query = parsed.query
     if query:
         # explode, mutate, then rebuild
-        params = [(k.lower(), v) for k, v in parse_qsl(query, keep_blank_values=True)]
+        # IMPORTANT: Preserve original case of query parameter keys (fixes case-sensitive pagination params like currentPage)
+        params = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True)]
 
         if drop_query_tracking:
             default_tracking = {
@@ -2308,7 +2309,8 @@ def normalize_url(
             }
             if extra_drop_params:
                 default_tracking |= {p.lower() for p in extra_drop_params}
-            params = [(k, v) for k, v in params if k not in default_tracking]
+            # Use case-insensitive comparison for tracking params, but preserve original key case
+            params = [(k, v) for k, v in params if k.lower() not in default_tracking]
 
         if sort_query:
             params.sort(key=lambda kv: kv[0])
