@@ -519,12 +519,16 @@ def create_task_response(task: dict, task_id: str, base_url: str) -> dict:
 
     if task["status"] == TaskStatus.COMPLETED:
         result_data = json.loads(task["result"])
-        response["result"] = result_data
-        # Backward compatibility: also expose extracted_content at top level
-        # so existing clients expecting response["result"] to be the content directly
-        # can access it via response["extracted_content"]
+        # Backward compatibility: response["result"] should be the content directly
+        # (not wrapped in a dict) so existing clients continue to work
         if isinstance(result_data, dict) and "extracted_content" in result_data:
-            response["extracted_content"] = result_data["extracted_content"]
+            response["result"] = result_data["extracted_content"]
+            # Add token_usage as separate top-level field for new clients
+            if "token_usage" in result_data:
+                response["token_usage"] = result_data["token_usage"]
+        else:
+            # Legacy format or non-dict result - return as-is
+            response["result"] = result_data
     elif task["status"] == TaskStatus.FAILED:
         response["error"] = task["error"]
 
