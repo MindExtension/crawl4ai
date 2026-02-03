@@ -213,6 +213,9 @@ async def process_llm_extraction(
                 "completion_tokens": llm_strategy.total_usage.completion_tokens,
                 "total_tokens": llm_strategy.total_usage.total_tokens,
             }
+            # Include model name if available
+            if hasattr(llm_strategy, 'llm_config') and llm_strategy.llm_config and hasattr(llm_strategy.llm_config, 'provider'):
+                result_data["token_usage"]["model"] = llm_strategy.llm_config.provider
             if hasattr(llm_strategy, 'usages') and llm_strategy.usages:
                 result_data["token_usage"]["chunks"] = [
                     {
@@ -650,6 +653,9 @@ async def handle_crawl_request(
                         'completion_tokens': extraction_strategy.total_usage.completion_tokens,
                         'total_tokens': extraction_strategy.total_usage.total_tokens,
                     }
+                    # Include model name if available
+                    if hasattr(extraction_strategy, 'llm_config') and extraction_strategy.llm_config and hasattr(extraction_strategy.llm_config, 'provider'):
+                        result_dict['token_usage']['model'] = extraction_strategy.llm_config.provider
                     # Include per-chunk breakdown if available
                     if hasattr(extraction_strategy, 'usages') and extraction_strategy.usages:
                         result_dict['token_usage']['chunks'] = [
