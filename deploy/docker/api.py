@@ -46,6 +46,48 @@ from utils import (
     get_llm_temperature,
     get_llm_base_url
 )
+
+
+def build_token_usage_dict(strategy) -> Optional[dict]:
+    """Extract token usage from an LLM extraction strategy.
+    
+    Args:
+        strategy: An extraction strategy that may have token usage tracking.
+        
+    Returns:
+        A dictionary with token usage data, or None if not available.
+    """
+    if not (hasattr(strategy, 'total_usage') 
+            and strategy.total_usage 
+            and getattr(strategy.total_usage, 'total_tokens', 0) > 0):
+        return None
+    
+    token_usage = {
+        'prompt_tokens': getattr(strategy.total_usage, 'prompt_tokens', 0) or 0,
+        'completion_tokens': getattr(strategy.total_usage, 'completion_tokens', 0) or 0,
+        'total_tokens': getattr(strategy.total_usage, 'total_tokens', 0) or 0,
+    }
+    
+    # Include model name if available
+    if (hasattr(strategy, 'llm_config') 
+            and strategy.llm_config 
+            and hasattr(strategy.llm_config, 'provider')):
+        token_usage['model'] = strategy.llm_config.provider
+    
+    # Include per-chunk breakdown if available
+    if hasattr(strategy, 'usages') and strategy.usages:
+        token_usage['chunks'] = [
+            {
+                'prompt_tokens': getattr(u, 'prompt_tokens', 0) or 0,
+                'completion_tokens': getattr(u, 'completion_tokens', 0) or 0,
+                'total_tokens': getattr(u, 'total_tokens', 0) or 0,
+            }
+            for u in strategy.usages
+        ]
+    
+    return token_usage
+
+
 from webhook import WebhookDeliveryService
 
 import psutil, time
@@ -207,24 +249,9 @@ async def process_llm_extraction(
         result_data = {"extracted_content": content}
         
         # Add token usage if available
-        if hasattr(llm_strategy, 'total_usage') and llm_strategy.total_usage:
-            result_data["token_usage"] = {
-                "prompt_tokens": llm_strategy.total_usage.prompt_tokens,
-                "completion_tokens": llm_strategy.total_usage.completion_tokens,
-                "total_tokens": llm_strategy.total_usage.total_tokens,
-            }
-            # Include model name if available
-            if hasattr(llm_strategy, 'llm_config') and llm_strategy.llm_config and hasattr(llm_strategy.llm_config, 'provider'):
-                result_data["token_usage"]["model"] = llm_strategy.llm_config.provider
-            if hasattr(llm_strategy, 'usages') and llm_strategy.usages:
-                result_data["token_usage"]["chunks"] = [
-                    {
-                        "prompt_tokens": u.prompt_tokens,
-                        "completion_tokens": u.completion_tokens,
-                        "total_tokens": u.total_tokens,
-                    }
-                    for u in llm_strategy.usages
-                ]
+        token_usage = build_token_usage_dict(llm_strategy)
+        if token_usage:
+            result_data["token_usage"] = token_usage
 
         await redis.hset(f"task:{task_id}", mapping={
             "status": TaskStatus.COMPLETED,
@@ -644,28 +671,6 @@ async def handle_crawl_request(
                 # If PDF exists, encode it to base64
                 if result_dict.get('pdf') is not None and isinstance(result_dict.get('pdf'), bytes):
                     result_dict['pdf'] = b64encode(result_dict['pdf']).decode('utf-8')
-                
-                # Add token usage if LLM extraction was used
-                extraction_strategy = crawler_config.extraction_strategy
-                if extraction_strategy and hasattr(extraction_strategy, 'total_usage') and extraction_strategy.total_usage:
-                    result_dict['token_usage'] = {
-                        'prompt_tokens': extraction_strategy.total_usage.prompt_tokens,
-                        'completion_tokens': extraction_strategy.total_usage.completion_tokens,
-                        'total_tokens': extraction_strategy.total_usage.total_tokens,
-                    }
-                    # Include model name if available
-                    if hasattr(extraction_strategy, 'llm_config') and extraction_strategy.llm_config and hasattr(extraction_strategy.llm_config, 'provider'):
-                        result_dict['token_usage']['model'] = extraction_strategy.llm_config.provider
-                    # Include per-chunk breakdown if available
-                    if hasattr(extraction_strategy, 'usages') and extraction_strategy.usages:
-                        result_dict['token_usage']['chunks'] = [
-                            {
-                                'prompt_tokens': u.prompt_tokens,
-                                'completion_tokens': u.completion_tokens,
-                                'total_tokens': u.total_tokens,
-                            }
-                            for u in extraction_strategy.usages
-                        ]
                     
                 processed_results.append(result_dict)
             except Exception as e:
@@ -683,6 +688,14 @@ async def handle_crawl_request(
             "server_memory_delta_mb": mem_delta_mb,
             "server_peak_memory_mb": peak_mem_mb
         }
+
+        # Add token usage at response level if LLM extraction was used
+        # This is cumulative across all URLs in the request
+        extraction_strategy = crawler_config.extraction_strategy
+        if extraction_strategy:
+            token_usage = build_token_usage_dict(extraction_strategy)
+            if token_usage:
+                response['token_usage'] = token_usage
 
         # Track request completion
         try:
