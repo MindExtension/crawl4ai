@@ -46,6 +46,48 @@ from utils import (
     get_llm_temperature,
     get_llm_base_url
 )
+
+
+def build_token_usage_dict(strategy) -> Optional[dict]:
+    """Extract token usage from an LLM extraction strategy.
+    
+    Args:
+        strategy: An extraction strategy that may have token usage tracking.
+        
+    Returns:
+        A dictionary with token usage data, or None if not available.
+    """
+    if not (hasattr(strategy, 'total_usage') 
+            and strategy.total_usage 
+            and getattr(strategy.total_usage, 'total_tokens', 0) > 0):
+        return None
+    
+    token_usage = {
+        'prompt_tokens': getattr(strategy.total_usage, 'prompt_tokens', 0) or 0,
+        'completion_tokens': getattr(strategy.total_usage, 'completion_tokens', 0) or 0,
+        'total_tokens': getattr(strategy.total_usage, 'total_tokens', 0) or 0,
+    }
+    
+    # Include model name if available
+    if (hasattr(strategy, 'llm_config') 
+            and strategy.llm_config 
+            and hasattr(strategy.llm_config, 'provider')):
+        token_usage['model'] = strategy.llm_config.provider
+    
+    # Include per-chunk breakdown if available
+    if hasattr(strategy, 'usages') and strategy.usages:
+        token_usage['chunks'] = [
+            {
+                'prompt_tokens': getattr(u, 'prompt_tokens', 0) or 0,
+                'completion_tokens': getattr(u, 'completion_tokens', 0) or 0,
+                'total_tokens': getattr(u, 'total_tokens', 0) or 0,
+            }
+            for u in strategy.usages
+        ]
+    
+    return token_usage
+
+
 from webhook import WebhookDeliveryService
 
 import psutil, time
@@ -205,10 +247,15 @@ async def process_llm_extraction(
             content = result.extracted_content
 
         result_data = {"extracted_content": content}
+        
+        # Add token usage if available
+        token_usage = build_token_usage_dict(llm_strategy)
+        if token_usage:
+            result_data["token_usage"] = token_usage
 
         await redis.hset(f"task:{task_id}", mapping={
             "status": TaskStatus.COMPLETED,
-            "result": json.dumps(content)
+            "result": json.dumps(result_data)
         })
 
         # Send webhook notification on successful completion
@@ -471,7 +518,17 @@ def create_task_response(task: dict, task_id: str, base_url: str) -> dict:
     }
 
     if task["status"] == TaskStatus.COMPLETED:
-        response["result"] = json.loads(task["result"])
+        result_data = json.loads(task["result"])
+        # Backward compatibility: response["result"] should be the content directly
+        # (not wrapped in a dict) so existing clients continue to work
+        if isinstance(result_data, dict) and "extracted_content" in result_data:
+            response["result"] = result_data["extracted_content"]
+            # Add token_usage as separate top-level field for new clients
+            if "token_usage" in result_data:
+                response["token_usage"] = result_data["token_usage"]
+        else:
+            # Legacy format or non-dict result - return as-is
+            response["result"] = result_data
     elif task["status"] == TaskStatus.FAILED:
         response["error"] = task["error"]
 
@@ -641,6 +698,14 @@ async def handle_crawl_request(
             "server_memory_delta_mb": mem_delta_mb,
             "server_peak_memory_mb": peak_mem_mb
         }
+
+        # Add token usage at response level if LLM extraction was used
+        # This is cumulative across all URLs in the request
+        extraction_strategy = crawler_config.extraction_strategy
+        if extraction_strategy:
+            token_usage = build_token_usage_dict(extraction_strategy)
+            if token_usage:
+                response['token_usage'] = token_usage
 
         # Track request completion
         try:
