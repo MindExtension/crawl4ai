@@ -205,10 +205,27 @@ async def process_llm_extraction(
             content = result.extracted_content
 
         result_data = {"extracted_content": content}
+        
+        # Add token usage if available
+        if hasattr(llm_strategy, 'total_usage') and llm_strategy.total_usage:
+            result_data["token_usage"] = {
+                "prompt_tokens": llm_strategy.total_usage.prompt_tokens,
+                "completion_tokens": llm_strategy.total_usage.completion_tokens,
+                "total_tokens": llm_strategy.total_usage.total_tokens,
+            }
+            if hasattr(llm_strategy, 'usages') and llm_strategy.usages:
+                result_data["token_usage"]["chunks"] = [
+                    {
+                        "prompt_tokens": u.prompt_tokens,
+                        "completion_tokens": u.completion_tokens,
+                        "total_tokens": u.total_tokens,
+                    }
+                    for u in llm_strategy.usages
+                ]
 
         await redis.hset(f"task:{task_id}", mapping={
             "status": TaskStatus.COMPLETED,
-            "result": json.dumps(content)
+            "result": json.dumps(result_data)
         })
 
         # Send webhook notification on successful completion
@@ -624,6 +641,25 @@ async def handle_crawl_request(
                 # If PDF exists, encode it to base64
                 if result_dict.get('pdf') is not None and isinstance(result_dict.get('pdf'), bytes):
                     result_dict['pdf'] = b64encode(result_dict['pdf']).decode('utf-8')
+                
+                # Add token usage if LLM extraction was used
+                extraction_strategy = crawler_config.extraction_strategy
+                if extraction_strategy and hasattr(extraction_strategy, 'total_usage') and extraction_strategy.total_usage:
+                    result_dict['token_usage'] = {
+                        'prompt_tokens': extraction_strategy.total_usage.prompt_tokens,
+                        'completion_tokens': extraction_strategy.total_usage.completion_tokens,
+                        'total_tokens': extraction_strategy.total_usage.total_tokens,
+                    }
+                    # Include per-chunk breakdown if available
+                    if hasattr(extraction_strategy, 'usages') and extraction_strategy.usages:
+                        result_dict['token_usage']['chunks'] = [
+                            {
+                                'prompt_tokens': u.prompt_tokens,
+                                'completion_tokens': u.completion_tokens,
+                                'total_tokens': u.total_tokens,
+                            }
+                            for u in extraction_strategy.usages
+                        ]
                     
                 processed_results.append(result_dict)
             except Exception as e:
