@@ -518,7 +518,13 @@ def create_task_response(task: dict, task_id: str, base_url: str) -> dict:
     }
 
     if task["status"] == TaskStatus.COMPLETED:
-        response["result"] = json.loads(task["result"])
+        result_data = json.loads(task["result"])
+        response["result"] = result_data
+        # Backward compatibility: also expose extracted_content at top level
+        # so existing clients expecting response["result"] to be the content directly
+        # can access it via response["extracted_content"]
+        if isinstance(result_data, dict) and "extracted_content" in result_data:
+            response["extracted_content"] = result_data["extracted_content"]
     elif task["status"] == TaskStatus.FAILED:
         response["error"] = task["error"]
 
