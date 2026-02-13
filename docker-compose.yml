@@ -1,11 +1,11 @@
-version: '3.8'
+version: "3.8"
 
 # Shared configuration for all environments
 x-base-config: &base-config
   ports:
-    - "11235:11235"  # Gunicorn port
+    - "11235:11235" # Gunicorn port
   env_file:
-    - .llm.env       # API keys (create from .llm.env.example)
+    - .llm.env # API keys (create from .llm.env.example)
   # Uncomment to set default environment variables (will overwrite .llm.env)
   # environment:
   #   - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -17,13 +17,13 @@ x-base-config: &base-config
   #   - GEMINI_API_KEY=${GEMINI_API_KEY:-}
   #   - LLM_PROVIDER=${LLM_PROVIDER:-}  # Optional: Override default provider (e.g., "anthropic/claude-3-opus")
   volumes:
-    - /dev/shm:/dev/shm  # Chromium performance
+    - /dev/shm:/dev/shm # Chromium performance
   deploy:
     resources:
       limits:
-        memory: 4G
+        memory: 8G
       reservations:
-        memory: 1G
+        memory: 2G
   restart: unless-stopped
   healthcheck:
     test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
@@ -38,7 +38,7 @@ services:
     # 1. Default: Pull multi-platform test image from Docker Hub
     # 2. Override with local image via: IMAGE=local-test docker compose up
     image: ${IMAGE:-unclecode/crawl4ai:${TAG:-latest}}
-    
+
     # Local build config (used with --build)
     build:
       context: .
@@ -46,6 +46,6 @@ services:
       args:
         INSTALL_TYPE: ${INSTALL_TYPE:-default}
         ENABLE_GPU: ${ENABLE_GPU:-false}
-    
+
     # Inherit shared config
     <<: *base-config
