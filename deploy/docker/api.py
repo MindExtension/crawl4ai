@@ -47,6 +47,11 @@ from utils import (
     get_llm_base_url
 )
 
+# Job-level semaphore: limits concurrent crawl jobs to prevent browser overload.
+# Different from GLOBAL_SEM in server.py which caps concurrent page crawls.
+# 5 jobs × ~3 pages avg = ~15 pages, matching max_pages config.
+CRAWL_JOB_SEM = asyncio.Semaphore(5)
+
 
 def build_token_usage_dict(strategy) -> Optional[dict]:
     """Extract token usage from an LLM extraction strategy.
@@ -877,44 +882,45 @@ async def handle_crawl_job(
     webhook_service = WebhookDeliveryService(config)
 
     async def _runner():
-        try:
-            result = await handle_crawl_request(
-                urls=urls,
-                browser_config=browser_config,
-                crawler_config=crawler_config,
-                config=config,
-            )
-            await redis.hset(f"task:{task_id}", mapping={
-                "status": TaskStatus.COMPLETED,
-                "result": json.dumps(result),
-            })
+        async with CRAWL_JOB_SEM:
+            try:
+                result = await handle_crawl_request(
+                    urls=urls,
+                    browser_config=browser_config,
+                    crawler_config=crawler_config,
+                    config=config,
+                )
+                await redis.hset(f"task:{task_id}", mapping={
+                    "status": TaskStatus.COMPLETED,
+                    "result": json.dumps(result),
+                })
 
-            # Send webhook notification on successful completion
-            await webhook_service.notify_job_completion(
-                task_id=task_id,
-                task_type="crawl",
-                status="completed",
-                urls=urls,
-                webhook_config=webhook_config,
-                result=result
-            )
+                # Send webhook notification on successful completion
+                await webhook_service.notify_job_completion(
+                    task_id=task_id,
+                    task_type="crawl",
+                    status="completed",
+                    urls=urls,
+                    webhook_config=webhook_config,
+                    result=result
+                )
 
-            await asyncio.sleep(5)  # Give Redis time to process the update
-        except Exception as exc:
-            await redis.hset(f"task:{task_id}", mapping={
-                "status": TaskStatus.FAILED,
-                "error": str(exc),
-            })
+                await asyncio.sleep(5)  # Give Redis time to process the update
+            except Exception as exc:
+                await redis.hset(f"task:{task_id}", mapping={
+                    "status": TaskStatus.FAILED,
+                    "error": str(exc),
+                })
 
-            # Send webhook notification on failure
-            await webhook_service.notify_job_completion(
-                task_id=task_id,
-                task_type="crawl",
-                status="failed",
-                urls=urls,
-                webhook_config=webhook_config,
-                error=str(exc)
-            )
+                # Send webhook notification on failure
+                await webhook_service.notify_job_completion(
+                    task_id=task_id,
+                    task_type="crawl",
+                    status="failed",
+                    urls=urls,
+                    webhook_config=webhook_config,
+                    error=str(exc)
+                )
 
     background_tasks.add_task(_runner)
     return {"task_id": task_id}

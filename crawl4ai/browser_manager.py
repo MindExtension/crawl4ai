@@ -1053,6 +1053,8 @@ class BrowserManager:
                 context_settings["permissions"] = perms
 
         # Create and return the context with all settings
+        if self.browser is None:
+            raise Exception("Browser instance is not available (closed or not started). Cannot create context.")
         context = await self.browser.new_context(**context_settings)
 
         # Apply text mode settings if enabled
